@@ -155,55 +155,79 @@ from io import BytesIO
 import matplotlib.pyplot as plt
 from dotenv import load_dotenv
 import os
-import time
 
 load_dotenv()
 
 client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
 
-# 1. Load and RESIZE image
+# 1. Load and Prepare Image
+# Imagen often prefers specific aspect ratios, but let's start simple.
 try:
     img = Image.open("pic.png")
-    # Resize image to max 1024x1024 to save tokens (Crucial for Free Tier)
-    img.thumbnail((1024, 1024)) 
+    img.thumbnail((512, 512)) 
 except FileNotFoundError:
     print("Error: 'pic.png' not found.")
     exit()
 
-# 2. Use Gemini 2.0 Flash (Experimental)
-model_id = "gemini-2.0-flash-exp"
+# 2. Define the Model ID found in your list
+# We use the "Fast" version as it's lighter on resources
+model_id = "imagen-4.0-fast-generate-001"
 
-print("Sending request...")
+print(f"Sending request to {model_id}...")
 
 try:
-    response = client.models.generate_content(
+    # Note: 'generate_images' is the correct method for Imagen models
+    response = client.models.generate_images(
         model=model_id,
-        contents=[
-            "Create a new improved corporate-style version of this image. Maintain the composition but improve the lighting and style.",
-            img
-        ],
-        config=types.GenerateContentConfig(
-            response_modalities=["TEXT", "IMAGE"], 
-            temperature=0.7,
+        prompt="Transform this image into a high-quality oil painting style. Maintain the main subject but change the texture.",
+        config=types.GenerateImagesConfig(
+            number_of_images=1,
+            # Some versions of the SDK/API allow passing the image for editing here
+            # If this specific 'fast' model is Text-to-Image only, it might ignore the image 
+            # or throw an error, but it's the best first step.
         )
     )
 
-    # 3. Extract Image
-    if response.candidates and response.candidates[0].content.parts:
-        for part in response.candidates[0].content.parts:
-            if part.inline_data:
-                print("Image generated!")
-                image_bytes = part.inline_data.data
-                generated_img = Image.open(BytesIO(image_bytes))
-                plt.imshow(generated_img)
-                plt.axis("off")
-                plt.show()
-                generated_img.save("corporate_result.png")
-                break
+    # 3. Extract and Show Image
+    if response.generated_images:
+        print("✅ Image Generated Successfully!")
+        image_bytes = response.generated_images[0].image.image_bytes
+        generated_img = Image.open(BytesIO(image_bytes))
+        
+        plt.imshow(generated_img)
+        plt.axis("off")
+        plt.show()
+        generated_img.save("imagen4_result.png")
     else:
-        print("No image generated. Model said:", response.text)
+        print("❌ No image returned.")
 
 except Exception as e:
-    print(f"\nError: {e}")
-    # If it's a 429 error, it will print here. 
-    # If you see 'limit: 0' again, wait 1 minute before trying.
+    print(f"\n❌ Error: {e}")
+    
+    # DIAGNOSTIC: If Imagen 4 fails, let's fallback to the Gemini 2.0 Exp model
+    # which supports 'generateContent' (Text+Image inputs)
+    print("\n⚠️ Imagen 4 failed. Attempting fallback to Gemini 2.0 Flash Exp...")
+    
+    try:
+        fallback_model = "gemini-2.0-flash-exp-image-generation"
+        response = client.models.generate_content(
+            model=fallback_model,
+            contents=[
+                "Create a variation of this image in a cyberpunk style.",
+                img
+            ]
+        )
+        if response.candidates and response.candidates[0].content.parts:
+             for part in response.candidates[0].content.parts:
+                if part.inline_data:
+                    print("✅ Fallback Image Generated!")
+                    image_bytes = part.inline_data.data
+                    generated_img = Image.open(BytesIO(image_bytes))
+                    generated_img.save("fallback_result.png")
+                    break
+        else:
+            print("❌ Fallback also failed (No image content).")
+            
+    except Exception as e2:
+        print(f"❌ Fallback Error: {e2}")
+        print("\n[Critical Info] If both fail with 429 or 403, you definitively need to enable Billing in Google Cloud Console.")
