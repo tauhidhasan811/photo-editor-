@@ -6,3 +6,4 @@ langchain
 matplotlib
 langchain-google-genai
 google-generativeai
+google-genai
